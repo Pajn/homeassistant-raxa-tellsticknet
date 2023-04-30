@@ -72,6 +72,7 @@ async def async_setup_platform(
     LOGGER.warn("light setup_platform")
     tellstick = TellstickNet()
     hass.async_create_task(tellstick.listen())
+    hass.async_create_task(tellstick.discover_periodic())
     lights = [NexaSelfLearningLight(tellstick, light) for light in config["lights"]]
     add_entities(lights)
 
@@ -88,6 +89,7 @@ async def async_setup_entry(
     LOGGER.warn("light async_setup_entry %s", config)
     tellstick = TellstickNet()
     hass.async_create_task(tellstick.listen())
+    hass.async_create_task(tellstick.discover_periodic())
     lights = [NexaSelfLearningLight(tellstick, light) for light in config["lights"]]
     add_entities(lights)
 
@@ -96,20 +98,14 @@ class TellstickNet:
     """Communicates with the tellsticks"""
 
     transport = None
-    tellsticks: List[socket.socket] = []
-
-    def __init__(self) -> None:
-        self._sock = socket.socket(
-            socket.AF_INET,
-            socket.SOCK_DGRAM,
-        )
+    tellsticks: set[socket.socket] = set()
 
     async def listen(self):
         if self.transport is not None:
             self.transport.close()
         tellsticks = self.tellsticks
 
-        class DiscoverProtocol:
+        class DiscoverProtocol(asyncio.DatagramProtocol):
             def connection_made(self, transport):
                 pass
                 # self2.transport = transport
@@ -117,6 +113,11 @@ class TellstickNet:
             def datagram_received(self, data, addr):
                 message = data.decode()
                 LOGGER.warn("Received %r from %s" % (message, addr))
+                if message.startswith("TellStickNet"):
+                    _header, mac, activation_code, version = message.split(":")
+                    LOGGER.warn("Found tellstick: {mac} {activation_code} {version}")
+                ip, port = addr
+                tellsticks.add(ip)
                 # print("Send %r to %s" % (message, addr))
                 # self.transport.sendto(data, addr)
 
@@ -130,12 +131,36 @@ class TellstickNet:
         self.transport = transport
 
     def discover(self):
-        self._sock.sendto(b"D", ("255.255.255.255", BROADCAST_PORT))
+        with socket.socket(
+            socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP
+        ) as sock:
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+            sock.sendto(b"D", ("255.255.255.255", BROADCAST_PORT))
 
-    def send(self, buffer):
-        LOGGER.warn("light send %s", buffer)
+    async def discover_periodic(self):
+        while True:
+            self.discover()
+            await asyncio.sleep(600_000)
+
+    def send(self, message: bytes, repeats=8, pause=15):
+        buffer = (
+            b"4:sendh1:S"
+            + bytes(hex(len(message))[2:].upper(), "latin1")
+            + b":"
+            + message
+            + b"1:Pi"
+            + bytes(hex(pause)[2:].upper(), "latin1")
+            + b"s1:Ri"
+            + bytes(hex(repeats)[2:].upper(), "latin1")
+            + b"ss"
+        )
+        LOGGER.warn("light send %s", str(buffer))
         for ip in self.tellsticks:
-            self._sock.sendto(buffer, (ip, COMMUNICATION_PORT))
+            with socket.socket(
+                socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP
+            ) as sock:
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+                sock.sendto("buffer", (ip, COMMUNICATION_PORT))
 
 
 class NexaSelfLearningLight(LightEntity):
