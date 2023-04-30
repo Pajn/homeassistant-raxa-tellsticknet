@@ -59,7 +59,8 @@ async def async_setup_platform(
 ) -> None:
     LOGGER.warn("light setup_platform")
     global tellstick
-    tellstick = TellstickNet(hass)
+    if tellstick is None:
+        tellstick = TellstickNet(hass)
     async with async_timeout.timeout(30):
         await hass.async_add_executor_job(lambda: tellstick.start())
     lights = [NexaSelfLearningLight(tellstick, light) for light in config["lights"]]
@@ -76,6 +77,9 @@ async def async_setup_entry(
     if config_entry.options:
         config.update(config_entry.options)
     LOGGER.warn("light async_setup_entry %s", config)
+    global tellstick
+    if tellstick is None:
+        tellstick = TellstickNet(hass)
     lights = [NexaSelfLearningLight(tellstick, light) for light in config["lights"]]
     add_entities(lights)
 
@@ -96,13 +100,14 @@ class TellstickNet:
         self.discover()
 
     def listen(self):
-        self._run_event.set()
-
         self._sock = socket.socket(
             socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP
         )
         self._sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self._sock.bind((socket.INADDR_ANY, COMMUNICATION_PORT))
+        LOGGER.warn("started listening")
+
+        self._run_event.set()
 
         while self._run_event.is_set():
             (data, addr) = self._sock.recvfrom(1024)
