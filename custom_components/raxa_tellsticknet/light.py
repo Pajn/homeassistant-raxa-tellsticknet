@@ -61,8 +61,8 @@ async def async_setup_platform(
     global tellstick
     if tellstick is None:
         tellstick = TellstickNet(hass)
-    async with async_timeout.timeout(30):
-        await hass.async_add_executor_job(lambda: tellstick.start())
+        async with async_timeout.timeout(30):
+            await hass.async_add_executor_job(lambda: tellstick.start())
     lights = [NexaSelfLearningLight(tellstick, light) for light in config["lights"]]
     add_entities(lights)
 
@@ -80,6 +80,8 @@ async def async_setup_entry(
     global tellstick
     if tellstick is None:
         tellstick = TellstickNet(hass)
+        async with async_timeout.timeout(30):
+            await hass.async_add_executor_job(lambda: tellstick.start())
     lights = [NexaSelfLearningLight(tellstick, light) for light in config["lights"]]
     add_entities(lights)
 
