@@ -1,8 +1,10 @@
 """Platform for light integration."""
 from __future__ import annotations
+from datetime import timedelta
 
 import socket
-import asyncio
+import threading
+import async_timeout
 from typing import Any, List, Optional
 
 import voluptuous as vol
@@ -19,6 +21,7 @@ from homeassistant import config_entries, core
 from homeassistant.core import HomeAssistant
 import homeassistant.helpers.config_validation as cv
 from homeassistant.helpers.entity import DeviceInfo
+from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType
 
@@ -45,6 +48,8 @@ PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend(
 COMMUNICATION_PORT = 42314
 BROADCAST_PORT = 30303
 
+tellstick: TellstickNet | None = None
+
 
 async def async_setup_platform(
     hass: HomeAssistant,
@@ -52,27 +57,11 @@ async def async_setup_platform(
     add_entities: AddEntitiesCallback,
     discovery_info: DiscoveryInfoType | None = None,
 ) -> None:
-    """Set up the Raxa TellstickNet platform."""
-    # Assign configuration variables.
-    # The configuration check takes care they are present.
-    # host = config[CONF_HOST]
-    # username = config[CONF_USERNAME]
-    # password = config.get(CONF_PASSWORD)
-
-    # Setup connection with devices/cloud
-    # hub = awesomelights.Hub(host, username, password)
-
-    # # Verify that passed in configuration works
-    # if not hub.is_valid_login():
-    #     _LOGGER.error("Could not connect to AwesomeLight hub")
-    #     return
-
-    # # Add devices
-    # add_entities(AwesomeLight(light) for light in hub.lights())
     LOGGER.warn("light setup_platform")
-    tellstick = TellstickNet()
-    hass.async_create_task(tellstick.listen())
-    hass.async_create_task(tellstick.discover_periodic())
+    global tellstick
+    tellstick = TellstickNet(hass)
+    async with async_timeout.timeout(30):
+        await hass.async_add_executor_job(lambda: tellstick.start())
     lights = [NexaSelfLearningLight(tellstick, light) for light in config["lights"]]
     add_entities(lights)
 
@@ -87,9 +76,6 @@ async def async_setup_entry(
     if config_entry.options:
         config.update(config_entry.options)
     LOGGER.warn("light async_setup_entry %s", config)
-    tellstick = TellstickNet()
-    hass.async_create_task(tellstick.listen())
-    hass.async_create_task(tellstick.discover_periodic())
     lights = [NexaSelfLearningLight(tellstick, light) for light in config["lights"]]
     add_entities(lights)
 
@@ -97,50 +83,67 @@ async def async_setup_entry(
 class TellstickNet:
     """Communicates with the tellsticks"""
 
-    transport = None
     tellsticks: set[socket.socket] = set()
 
-    async def listen(self):
-        if self.transport is not None:
-            self.transport.close()
-        tellsticks = self.tellsticks
+    def __init__(self, hass: HomeAssistant) -> None:
+        self._hass = hass
+        self._run_event = threading.Event()
+        self._thread = threading.Thread(target=self.listen, daemon=True)
 
-        class DiscoverProtocol(asyncio.DatagramProtocol):
-            def connection_made(self, transport):
-                pass
-                # self2.transport = transport
+    def start(self) -> None:
+        self._thread.start()
+        self._run_event.wait()
+        self.discover()
 
-            def datagram_received(self, data, addr):
-                message = data.decode()
-                LOGGER.warn("Received %r from %s" % (message, addr))
-                if message.startswith("TellStickNet"):
-                    _header, mac, activation_code, version = message.split(":")
-                    LOGGER.warn("Found tellstick: {mac} {activation_code} {version}")
-                ip, port = addr
-                tellsticks.add(ip)
-                # print("Send %r to %s" % (message, addr))
-                # self.transport.sendto(data, addr)
+    def listen(self):
+        self._run_event.set()
 
-        loop = asyncio.get_event_loop()
-        listen = loop.create_datagram_endpoint(
-            DiscoverProtocol,
-            local_addr=("0.0.0.0", COMMUNICATION_PORT),
-            allow_broadcast=True,
+        self._sock = socket.socket(
+            socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP
         )
-        transport, protocol = await listen
-        self.transport = transport
+        self._sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self._sock.bind((socket.INADDR_ANY, COMMUNICATION_PORT))
+
+        while self._run_event.is_set():
+            (data, addr) = self._sock.recvfrom(1024)
+            message = data.decode()
+            LOGGER.warn("Received %r from %s" % (message, addr))
+            if message.startswith("TellStickNet"):
+                _header, mac, activation_code, version = message.split(":")
+                LOGGER.warn("Found tellstick: {mac} {activation_code} {version}")
+                self._hass.bus.fire(
+                    "raxa_tellsticknet_event",
+                    {
+                        "mac": mac,
+                        "activation_code": activation_code,
+                        "version": version,
+                        "type": "tellstick_detected",
+                    },
+                )
+                # ip, port = addr
+                # tellsticks.add(ip)
+            elif message.startswith("TSNETRCprotocol:") and not message.endswith(
+                "data:;"
+            ):
+                self._hass.bus.fire(
+                    "raxa_tellsticknet_event",
+                    {
+                        "data": message,
+                        "type": "message_received",
+                    },
+                )
+
+    def stop(self):
+        self._run_event.clear()
+        self._sock.close()
+        self._thread.join()
 
     def discover(self):
         with socket.socket(
             socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP
         ) as sock:
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-            sock.sendto(b"D", ("255.255.255.255", BROADCAST_PORT))
-
-    async def discover_periodic(self):
-        while True:
-            self.discover()
-            await asyncio.sleep(600_000)
+            sock.sendto(b"D", (socket.INADDR_BROADCAST, BROADCAST_PORT))
 
     def send(self, message: bytes, repeats=8, pause=15):
         buffer = (
@@ -160,7 +163,7 @@ class TellstickNet:
                 socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP
             ) as sock:
                 sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-                sock.sendto("buffer", (ip, COMMUNICATION_PORT))
+                sock.sendto(buffer, (ip, COMMUNICATION_PORT))
 
 
 class NexaSelfLearningLight(LightEntity):

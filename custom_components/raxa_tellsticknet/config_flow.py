@@ -11,7 +11,7 @@ DEVICE_SCHEMA = vol.Schema(
     {
         vol.Required("name"): str,
         vol.Required("device_code"): vol.All(
-            vol.Coerce(int), vol.Range(min=0, max=67234433)
+            vol.Coerce(int), vol.Range(min=0)
         ),
         vol.Required("group_code"): vol.All(vol.Coerce(int), vol.Range(min=0, max=15)),
         vol.Optional("dimmable", default=False): bool,
