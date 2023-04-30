@@ -1,0 +1,10 @@
+default_config:
+
+logger:
+  default: info
+  logs:
+    custom_components.raxa_tellsticknet: debug
+    raxa_tellsticknet: debug
+
+debugpy:
+

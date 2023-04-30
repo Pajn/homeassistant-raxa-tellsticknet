@@ -1,0 +1,36 @@
+{
+    "config": {
+      "step": {
+        "user": {
+          "data": {
+            "name": "Name",
+            "device_code": "Device code",
+            "group_code": "Group code",
+            "dimmable": "Is the device dimmable",
+            "add_another": "Add another device?"
+          },
+          "title": "Add Device"
+        }
+      }
+    },
+    "options": {
+      "step": {
+        "init": {
+          "title": "Configure Raxa TellstickNet",
+          "data": {
+            "action": "What to do?"
+          }
+        },
+        "add_device": {
+          "data": {
+            "name": "Name",
+            "device_code": "Device code",
+            "group_code": "Group code",
+            "dimmable": "Is the device dimmable",
+            "add_another": "Add another device?"
+          },
+          "title": "Add Device"
+        }
+      }
+    }
+  }

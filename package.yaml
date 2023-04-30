@@ -1,0 +1,17 @@
+author:
+  email: pajn@users.noreply.github.com
+  homepage: https://github.com/pajn/homeassistant-raxa-tellsticknet
+  name: pajn
+description: Raxa TellstickNet
+files:
+  - custom_components/raxa_tellsticknet/__init__.py
+  - custom_components/raxa_tellsticknet/light.py
+keywords:
+  - light
+  - homeassistant
+  - home-assistant
+  - custom-component
+  - python
+license: MIT License
+name: raxa_tellsticknet
+type: component
