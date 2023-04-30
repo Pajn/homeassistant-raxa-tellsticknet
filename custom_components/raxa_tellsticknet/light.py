@@ -97,27 +97,32 @@ class TellstickNet:
         self._thread = threading.Thread(target=self.listen, daemon=True)
 
     def start(self) -> None:
+        LOGGER.debug("TellstickNet starting")
         self._thread.start()
+        LOGGER.debug("  Thread started")
         self._run_event.wait()
+        LOGGER.debug("  Event set")
         self.discover()
+        LOGGER.debug("  Discovered")
 
     def listen(self):
+        LOGGER.debug("starting listen")
         self._sock = socket.socket(
             socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP
         )
         self._sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        self._sock.bind((socket.INADDR_ANY, COMMUNICATION_PORT))
-        LOGGER.warn("started listening")
+        self._sock.bind(("0.0.0.0", COMMUNICATION_PORT))
+        LOGGER.debug("started listening")
 
         self._run_event.set()
 
         while self._run_event.is_set():
             (data, addr) = self._sock.recvfrom(1024)
             message = data.decode()
-            LOGGER.warn("Received %r from %s" % (message, addr))
+            LOGGER.debug("Received %r from %s" % (message, addr))
             if message.startswith("TellStickNet"):
                 _header, mac, activation_code, version = message.split(":")
-                LOGGER.warn("Found tellstick: {mac} {activation_code} {version}")
+                LOGGER.debug("Found tellstick: {mac} {activation_code} {version}")
                 self._hass.bus.fire(
                     "raxa_tellsticknet_event",
                     {
@@ -127,18 +132,16 @@ class TellstickNet:
                         "type": "tellstick_detected",
                     },
                 )
-                # ip, port = addr
-                # tellsticks.add(ip)
-            elif message.startswith("TSNETRCprotocol:") and not message.endswith(
-                "data:;"
-            ):
+            elif message.startswith("TSNETRC") and not message.endswith("data:;\r\n"):
                 self._hass.bus.fire(
                     "raxa_tellsticknet_event",
                     {
-                        "data": message,
+                        "data": message.removeprefix("TSNETRC").removesuffix("\r\n"),
                         "type": "message_received",
                     },
                 )
+            ip, port = addr
+            self.tellsticks.add(ip)
 
     def stop(self):
         self._run_event.clear()
@@ -146,11 +149,10 @@ class TellstickNet:
         self._thread.join()
 
     def discover(self):
-        with socket.socket(
-            socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP
-        ) as sock:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-            sock.sendto(b"D", (socket.INADDR_BROADCAST, BROADCAST_PORT))
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            sock.sendto(b"D", ("255.255.255.255", BROADCAST_PORT))
 
     def send(self, message: bytes, repeats=8, pause=15):
         buffer = (
@@ -166,10 +168,9 @@ class TellstickNet:
         )
         LOGGER.warn("light send %s", str(buffer))
         for ip in self.tellsticks:
-            with socket.socket(
-                socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP
-            ) as sock:
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
                 sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
                 sock.sendto(buffer, (ip, COMMUNICATION_PORT))
 
 
